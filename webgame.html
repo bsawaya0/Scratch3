@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BYU Cougar Dash</title>
+    <style>
+        body {
+            margin: 0;
+            background: linear-gradient(to bottom, #87CEEB 0%, #98D8C8 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            border: 2px solid #003087;
+            background: linear-gradient(to bottom, #87CEEB 70%, #228B22 70%);
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+        /* Move UI down so it doesn't overlap Back button */
+        #ui {
+            position: absolute;
+            top: 50px;   /* was 10px */
+            left: 10px;
+            color: navy;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px white;
+            z-index: 900;
+        }
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: navy;
+            font-size: 48px;
+            font-weight: bold;
+            text-align: center;
+            display: none;
+            background: rgba(255,255,255,0.9);
+            padding: 20px;
+            border-radius: 10px;
+        }
+        /* Back button styling */
+        #backBtn {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            padding: 8px 14px;
+            background-color: #003087;
+            color: white;
+            text-decoration: none;
+            font-family: Arial, sans-serif;
+            font-weight: bold;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <!-- Back to home -->
+    <a id="backBtn" href="BYUindex.html">Back</a>
+
+    <div id="ui">
+        <div>Score: <span id="score">0</span></div>
+        <div>Best: <span id="best">0</span></div>
+    </div>
+    <canvas id="gameCanvas" width="800" height="400"></canvas>
+    <div id="gameOver">
+        <div>Game Over!</div>
+        <div style="font-size: 24px;">Final Score: <span id="finalScore">0</span></div>
+        <div style="font-size: 18px;">Click to Restart</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const bestEl = document.getElementById('best');
+        const gameOverEl = document.getElementById('gameOver');
+        const finalScoreEl = document.getElementById('finalScore');
+
+        // Game state
+        let gameRunning = true;
+        let score = 0;
+        let frameCount = 0;
+        let bestScore = localStorage.getItem('byuDashBest') || 0;
+        bestEl.textContent = bestScore;
+
+        // Player (BYU Cougar-themed cube: navy with white Y)
+        const player = {
+            x: 100,
+            y: 300,
+            width: 40,
+            height: 40,
+            vy: 0,
+            gravity: 0.6,
+            jump: -14,
+            color: '#003087',
+            onGround: false
+        };
+
+        // Obstacles (spikes as Provo Temple spires, platforms as mountains)
+        let obstacles = [];
+        let platforms = [];
+        let obstacleTimer = 0;
+        let speed = 4;
+
+        // BYU-themed assets (simple drawings)
+        function drawCougarCube(x, y, w, h) {
+            ctx.fillStyle = '#003087'; // Navy blue
+            ctx.fillRect(x, y, w, h);
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 24px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('Y', x + w / 2, y + h / 2); // BYU Y
+            ctx.textAlign = 'left';
+        }
+
+        function drawTempleSpike(x, y, w, h) {
+            ctx.fillStyle = '#8B4513'; // Temple brown
+            ctx.fillRect(x, y, w, h);
+            ctx.fillStyle = 'white';
+            ctx.fillRect(x + 5, y - 15, w - 10, 15); // Spire top
+        }
+
+        function drawMountainPlat(x, y, w, h) {
+            ctx.fillStyle = '#228B22'; // Mountain green
+            ctx.beginPath();
+            ctx.moveTo(x, y + h);
+            ctx.lineTo(x + w / 2, y);
+            ctx.lineTo(x + w, y + h);
+            ctx.fill();
+        }
+
+        function drawBackground() {
+            // BYU campus hills/mountains
+            ctx.fillStyle = '#654321';
+            ctx.fillRect(0, 350, canvas.width, 50); // Ground
+            for (let i = 0; i < canvas.width; i += 100) {
+                drawMountainPlat(
+                    i * 1.5 + Math.sin(Date.now() * 0.001 + i) * 20,
+                    280,
+                    80,
+                    70
+                );
+            }
+            // Clouds
+            ctx.fillStyle = 'rgba(255,255,255,0.8)';
+            for (let i = 0; i < canvas.width; i += 200) {
+                ctx.beginPath();
+                ctx.arc(
+                    i + 50 + Math.sin(Date.now() * 0.002) * 10,
+                    60 + Math.sin(Date.now() * 0.001 + i) * 5,
+                    30,
+                    0,
+                    Math.PI * 2
+                );
+                ctx.arc(i + 80, 60, 35, 0, Math.PI * 2);
+                ctx.arc(i + 110, 65, 25, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function update() {
+            if (!gameRunning) return;
+
+            // Player physics
+            player.vy += player.gravity;
+            player.y += player.vy;
+            if (player.y + player.height > 340) { // Ground level
+                player.y = 340 - player.height;
+                player.vy = 0;
+                player.onGround = true;
+            }
+
+            // Obstacles
+            obstacleTimer++;
+            if (obstacleTimer > 80 - speed) {
+                if (Math.random() < 0.6) {
+                    obstacles.push({
+                        x: canvas.width,
+                        y: 340 - 50,
+                        width: 30,
+                        height: 50,
+                        type: 'spike'
+                    });
+                } else {
+                    platforms.push({
+                        x: canvas.width,
+                        y: 340 - 30,
+                        width: 80 + Math.random() * 40,
+                        height: 30,
+                        type: 'plat'
+                    });
+                }
+                obstacleTimer = 0;
+            }
+
+            // Move obstacles
+            obstacles.forEach((obs, i) => {
+                obs.x -= speed;
+                if (obs.x + obs.width < 0) obstacles.splice(i, 1);
+            });
+            platforms.forEach((plat, i) => {
+                plat.x -= speed;
+                if (plat.x + plat.width < 0) platforms.splice(i, 1);
+            });
+
+            // Collision detection
+            obstacles.forEach(obs => {
+                if (
+                    player.x < obs.x + obs.width &&
+                    player.x + player.width > obs.x &&
+                    player.y < obs.y + obs.height &&
+                    player.y + player.height > obs.y
+                ) {
+                    endGame();
+                }
+            });
+            platforms.forEach(plat => {
+                if (
+                    player.x + player.width > plat.x &&
+                    player.x < plat.x + plat.width &&
+                    player.y + player.height > plat.y &&
+                    player.y + player.height < plat.y + player.vy + 10
+                ) {
+                    player.y = plat.y - player.height;
+                    player.vy = 0;
+                    player.onGround = true;
+                }
+            });
+
+            // Score
+            frameCount++;
+            score = Math.floor(frameCount / 3);
+            scoreEl.textContent = score;
+            if (score > bestScore) {
+                bestScore = score;
+                bestEl.textContent = bestScore;
+                localStorage.setItem('byuDashBest', bestScore);
+            }
+
+            speed += 0.001; // Accelerate
+        }
+
+        function restart() {
+            gameRunning = true;
+            player.y = 300;
+            player.vy = 0;
+            obstacles = [];
+            platforms = [];
+            obstacleTimer = 0;
+            speed = 4;
+            score = 0;
+            frameCount = 0; // reset here
+            gameOverEl.style.display = 'none';
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawBackground();
+
+            // Draw platforms
+            platforms.forEach(plat => drawMountainPlat(plat.x, plat.y, plat.width, plat.height));
+
+            // Draw obstacles
+            obstacles.forEach(obs => drawTempleSpike(obs.x, obs.y, obs.width, obs.height));
+
+            // Draw player
+            drawCougarCube(player.x, player.y, player.width, player.height);
+
+            // Title
+            ctx.fillStyle = 'navy';
+            ctx.font = 'bold 32px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('BYU Cougar Dash', canvas.width / 2, 40);
+            ctx.font = '20px Arial';
+            ctx.fillText('Jump over Temple Spires & Mountains!', canvas.width / 2, 65);
+            ctx.textAlign = 'left';
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function jump() {
+            if (gameRunning || player.onGround) {
+                player.vy = player.jump;
+                player.onGround = false;
+            }
+        }
+
+        function endGame() {
+            gameRunning = false;
+            finalScoreEl.textContent = score;
+            gameOverEl.style.display = 'block';
+        }
+
+        // Controls
+        document.addEventListener('keydown', e => {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                jump();
+            }
+        });
+        canvas.addEventListener('click', jump);
+        gameOverEl.addEventListener('click', restart);
+
+        gameLoop();
+    </script>
+</body>
+</html>
